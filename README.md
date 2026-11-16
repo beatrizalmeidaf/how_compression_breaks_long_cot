@@ -1,13 +1,12 @@
 # How Compression Breaks Long Chain-of-Thought
 
-Anonymous code, data and paper source for *How Compression Breaks Long Chain-of-Thought: Collapse, Dilation and
+Anonymous code and data for *How Compression Breaks Long Chain-of-Thought: Collapse, Dilation and
 Non-Termination*.
 
 ## Contents
 
 | Path | What it is |
 |---|---|
-| `paper/` | LaTeX source of the TMLR submission (`paper.tex`, generated `tables/` and `figures/`) and the compiled `paper.pdf`. |
 | `prereg/2026-10-14_crossover.md` | The pre-registered rule of Section 9 (rule, metrics, held-out set, success criteria). |
 | `prereg/2026-10-14_crossover.sha256` | Its SHA-256 hash, fixed before the held-out data were generated. |
 | `results/*.csv` | Aggregated results behind every table and figure (one row per model/variant/task). |
