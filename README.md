@@ -1,6 +1,6 @@
-# How Compression Breaks Long Chain-of-Thought
+# Supplementary material
 
-Anonymous code and data for *How Compression Breaks Long Chain-of-Thought: Collapse, Dilation and
+Anonymous supplementary material for *How Compression Breaks Long Chain-of-Thought: Collapse, Dilation and
 Non-Termination*.
 
 ## Contents
