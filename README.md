@@ -1,6 +1,6 @@
-# Supplementary material
+# How Compression Breaks Long Chain-of-Thought
 
-Anonymous supplementary material for *How Compression Breaks Long Chain-of-Thought: Collapse, Dilation and
+Anonymous code and data for *How Compression Breaks Long Chain-of-Thought: Collapse, Dilation and
 Non-Termination*.
 
 ## Contents
@@ -47,7 +47,7 @@ python scripts/gen_traces.py --model qwen3-4b__gptq-w3g128 --dataset math500 --n
 |---|---|
 | 4 Collapse and dilation (fit, validation, per-problem overlap) | `a1_budget_tax.py`, `fit_validation.py`, `problem_overlap.py`, `loop_hazard.py` |
 | 5 How compressed models fail | `failure_mode.py`, `failure_paired.py`, `extend_traces.py`, `extend_analysis.py`, `memory_matched.py`, `robustness_check.py`, `throughput.py` |
-| 6 Derivation versus stopping, early exit | `force_answer.py`, `rollback.py`, `early_exit.py`, `early_exit_analysis.py` |
+| 6 Derivation versus stopping, early exit | `force_answer.py`, `rollback.py`, `early_exit.py`, `early_exit_analysis.py`, `early_exit_sensitivity.py` |
 | 7 Reading versus writing | `swap_answer.py`, `leakage_check.py`, `dilation_control.py`, `dense_pairs_analysis.py`, `mix_decode.py`, `mix_report.py` |
 | Sampling noise, negative results, pre-registration | `temp_shift.py`, `teacher_force.py`, `probe_loops.py`, `extract_feats.py`, `train_length_critic.py`, `fork_rollouts.py`, `p0_analyze.py`, `xover_report.py` |
 | Tables and figures | `paper_tables.py`, `paper_figures.py` |
