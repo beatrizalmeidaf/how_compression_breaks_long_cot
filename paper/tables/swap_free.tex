@@ -1,0 +1,26 @@
+\begin{tabular}{lllrrrrr}
+\toprule
+model & task & compressor & D->D & Q->Q & D thinks, Q answers & Q thinks, D answers & D, no reasoning \\
+\midrule
+Qwen3-1.7B & MATH & RTN-W4 & 0.86 & 0.58 & 0.83 & 0.72 & 0.71 \\
+Qwen3-1.7B & MATH & GPTQ-W4 & 0.86 & 0.72 & 0.84 & 0.78 & 0.71 \\
+Qwen3-1.7B & MATH & Wanda 30\% & 0.86 & 0.74 & 0.85 & 0.78 & 0.71 \\
+Qwen3-1.7B & MATH & GPTQ-W3 & 0.86 & 0.08 & 0.69 & 0.64 & 0.71 \\
+Qwen3-4B & MATH & RTN-W4 & 0.92 & 0.91 & 0.93 & 0.91 & 0.84 \\
+Qwen3-4B & MATH & GPTQ-W3 & 0.92 & 0.56 & 0.86 & 0.84 & 0.84 \\
+Qwen3-4B & MATH & Wanda 50\% & 0.92 & 0.56 & 0.88 & 0.79 & 0.84 \\
+Qwen3-4B & MATH & RTN-W3 & 0.92 & 0.32 & 0.84 & 0.81 & 0.84 \\
+Qwen3-8B & MATH & RTN-W4 & 0.93 & 0.91 & 0.92 & 0.92 & 0.83 \\
+Qwen3-8B & MATH & GPTQ-W3 & 0.93 & 0.76 & 0.87 & 0.87 & 0.83 \\
+Qwen3-8B & MATH & Wanda 50\% & 0.93 & 0.65 & 0.84 & 0.85 & 0.83 \\
+Qwen3-8B & MATH & RTN-W3 & 0.93 & 0.29 & 0.57 & 0.81 & 0.83 \\
+Qwen3-4B & GPQA & RTN-W4 & 0.50 & 0.43 & 0.47 & 0.46 & 0.35 \\
+Qwen3-4B & GPQA & GPTQ-W3 & 0.50 & 0.24 & 0.42 & 0.38 & 0.35 \\
+Qwen3-4B & GPQA & Wanda 50\% & 0.50 & 0.25 & 0.46 & 0.35 & 0.35 \\
+Qwen3-4B & GPQA & RTN-W3 & 0.50 & 0.22 & 0.42 & 0.36 & 0.35 \\
+R1-Llama-8B & MATH & RTN-W4 & 0.75 & 0.81 & 0.85 & 0.72 & 0.55 \\
+R1-Llama-8B & MATH & GPTQ-W3 & 0.75 & 0.67 & 0.83 & 0.65 & 0.55 \\
+R1-Llama-8B & MATH & Wanda 50\% & 0.75 & 0.56 & 0.82 & 0.55 & 0.55 \\
+R1-Llama-8B & MATH & RTN-W3 & 0.75 & 0.20 & 0.82 & 0.35 & 0.55 \\
+\bottomrule
+\end{tabular}

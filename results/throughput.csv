@@ -1,0 +1,6 @@
+label,model,weights_gb,tok_s_batch128,tok_s_single
+qwen3-4b-awq,Qwen/Qwen3-4B-AWQ,2.67,9031.9,251.2
+qwen3-8b-awq,Qwen/Qwen3-8B-AWQ,6.1,7892.0,205.2
+qwen3-1.7b,Qwen/Qwen3-1.7B,4.06,12689.0,389.2
+qwen3-4b,Qwen/Qwen3-4B,8.04,9272.7,221.5
+qwen3-8b,Qwen/Qwen3-8B,16.38,6920.9,144.9

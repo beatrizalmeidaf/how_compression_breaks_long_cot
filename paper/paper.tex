@@ -1,0 +1,373 @@
+% TMLR submission. tables/*.tex and figures/*.pdf are generated from the data by
+% code/scripts/paper_tables.py and code/scripts/paper_figures.py. Compile with any LaTeX engine (e.g. tectonic paper.tex).
+\documentclass[10pt]{article}
+\usepackage{tmlr}            % submissao anonima; [accepted] na versao final, [preprint] para arXiv
+
+\usepackage[T1]{fontenc}
+\usepackage{microtype}
+\usepackage{inconsolata}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{adjustbox}
+
+\newcommand{\acc}{\mathrm{acc}}
+\newcommand{\accwr}[2]{\acc(#1\!\rightarrow\!#2)}
+
+\title{How Compression Breaks Long Chain-of-Thought:\\Collapse, Dilation and Non-Termination}
+
+% autores ficam ocultos na submissao (tmlr sem [accepted]/[preprint])
+\author{\name Anonymous Authors \email anonymous@example.com}
+
+\def\month{MM}
+\def\year{YYYY}
+\def\openreview{\url{https://openreview.net/forum?id=XXXX}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Post-training compression of reasoning models is usually validated with a single accuracy value at a single generation budget. We study 51 compressed variants (weight quantization and pruning) of five reasoning models from two families on MATH-500, GPQA-Diamond and 23 non-mathematical BIG-Bench Hard tasks, and find that the characteristic failure of severe compression is non-termination. In all 22 severe variants (3-bit weights or 50\% sparsity), more traces exhaust a 16k-token budget without an answer: through token-periodic loops for most compressors, and through long reasoning without a loop for 3-bit GPTQ. Doubling the budget resolves 1\% of the loops, and forcing an answer at the budget recovers only 15--22\% of the loss (Qwen3-4B on MATH). Mild compression instead mainly rescales the budget axis: accuracy as a function of the budget is well described by $\acc_Q(b)\approx\alpha\,\acc_D(b/\kappa)$ (median RMSE 0.007), with $\alpha$ close to 1 and an effective dilation $\kappa$ on both sides of 1, which reconciles opposite reports on the length of compressed reasoning. In Qwen3, a compressed model therefore fails differently from a smaller dense model of equal accuracy on all three tasks, although a small R1-distilled model fails like a compressed one. At equal weight memory, calibrated 4-bit quantization of a larger Qwen3 model loses at most 0.015 against the smaller dense model, whereas every 3-bit variant is less accurate and spends more tokens. Because loops are periodic, they can be detected as they form: closing the reasoning at detection raises the accuracy of loop-dominated compressors by up to 0.17 with up to 64\% fewer tokens, and in none of 67 models and variants does it lower accuracy significantly (no per-variant 95\% interval lies entirely below zero). A writer$\times$reader swap shows that compressed models, like smaller dense ones, read reasoning far better than they write it. We also report negative results, including a pre-registered prediction that failed on held-out data.
+\end{abstract}
+
+\section{Introduction}
+
+Reasoning models spend thousands of tokens before answering, and they are increasingly deployed compressed. Studies of compressed reasoning models report end accuracy at a fixed budget \citep{liu2025quantization,zhang2025compression}, observe that quantized models produce longer reasoning \citep{lotfi2026quantized} or that they do not \citep{liu2025quantization}, and propose retraining quantized models on their own generations \citep{chen2026onpolicy,zheng2026rightonq}. What remains unclear is \emph{how} a compressed model fails when it reasons, and whether that failure differs from simply being a weaker model.
+
+We address these questions with four measurements that require no retraining. A \emph{budget curve} computed from a single long generation gives accuracy at every budget up to 16k tokens: a trace counts as correct at budget $b$ if it finished within $b$ tokens with the right answer. Fitting the compressed curve against the dense one separates a rescaling of the budget axis from a lower accuracy within the measured budgets (\S\ref{sec:budget}). A \emph{classification of errors} into wrong answers, loops and long traces that exhaust the budget compares compressed models with their parents and with smaller dense models of equal accuracy (\S\ref{sec:failure}). A \emph{forced answer} closes a model's own reasoning at budget $b$, which measures whether an answer can be recovered from the reasoning written by $b$, as opposed to whether the model would have stopped (\S\ref{sec:forced}). A \emph{writer$\times$reader swap} lets one model write a reasoning prefix and another answer from it, which separates damage to writing reasoning from damage to reading it (\S\ref{sec:swap}).
+
+The central finding concerns how compressed models fail. Severe compression makes reasoning fail to terminate: in each of the 22 severe variants up to Qwen3-14B, more traces exhaust the budget without an answer, mostly through token-periodic loops and, for 3-bit GPTQ, through long reasoning without a loop. Mild compression mainly changes how many tokens the model needs to reach its accuracy and otherwise preserves the failure profile of the parent model. In Qwen3 that profile depends on model size: the few errors of the larger dense models are mostly non-terminating, whereas a smaller model more often terminates with a wrong answer. A compressed Qwen3 model and a smaller dense Qwen3 model of equal accuracy therefore fail differently, on math, science and BIG-Bench Hard alike; a small model distilled from R1, however, fails like a compressed one, so the contrast is not universal across families. Non-termination is also not mainly a failure to stop: forcing an answer at the budget recovers little of the loss, which qualifies the overthinking account of \citet{lotfi2026quantized}. Loops and truncation in quantized reasoning models have been reported before \citep{chen2026onpolicy,zheng2026rightonq}; what this work adds is their quantification by compression regime with confidence intervals, the comparison with the parent and with smaller models at matched accuracy, and the separation of answer recoverability from stopping. Two practical consequences follow. At equal weight memory, calibrated 4-bit quantization of a larger Qwen3 model is close to or better than a smaller dense model, whereas 3-bit quantization is not and also costs tokens (\S\ref{sec:failure}). Loops can be detected while they form, and closing the reasoning at detection recovers part of the loss of loop-dominated compressors at a fraction of the tokens, without a significant effect on dense models (\S\ref{sec:forced}).
+
+A second finding concerns what compression does not change. Given the dense model's reasoning, a severely compressed model answers almost as well as the dense model, whereas the reasoning it writes is much less useful to any reader. This writing--reading asymmetry survives controls for re-solving, answer leakage and budget dilation, but a control with natively smaller dense models shows that it is shared by weaker reasoners in general: in this respect, compression behaves like a smaller model. Finally, we report what did not work: generation-free metrics rank damage but do not calibrate it, and a threshold rule we pre-registered failed on held-out data.
+
+\section{Related work}
+
+\paragraph{Compressed reasoning models.}
+\citet{liu2025quantization} benchmark quantized reasoning models and identify model size, model origin and task difficulty as the main determinants of degradation; they find that scaling model size or reasoning steps can recover accuracy and that quantized models do not produce longer outputs. \citet{zhang2025compression} analyze compressed reasoning models and protect the most damaged weights. \citet{lucas2025rac} find that standard pruning can make reasoning models produce more thinking tokens with worse accuracy, attribute this to calibrating on inputs although reasoning is dominated by decoding, and reconstruct activations on the model's own chains of thought; our measurements of dilation and non-termination quantify this behavior across compressors, without proposing a compression method. \citet{lotfi2026quantized} report longer chains under aggressive quantization, attribute failures to overthinking, and penalize hesitation tokens. \citet{lee2026reqat} find that FP4 errors concentrate on low-entropy tokens and train the quantized model to protect these decisions. Recent quantization-aware training methods use the quantized model's own trajectories to counter exposure bias \citep{chen2026onpolicy,zheng2026rightonq,wang2026trace}, and \citet{chen2026onpolicy} and \citet{zheng2026rightonq} report that low-bit models fall into repetitive loops or fail to terminate within the budget; we quantify these failure modes by regime and compare them with the parent and with smaller models. The present work proposes no compression or training method; it contributes diagnostics that locate the damage and a decoding-time policy that follows from them. The dilation parameter $\kappa$ takes values on both sides of 1 across compressors, which reconciles the opposite length findings of \citet{liu2025quantization} and \citet{lotfi2026quantized}.
+
+\paragraph{Collaborative decoding.}
+Several systems let a stronger model intervene in a weaker model's reasoning, including SpecReason \citep{pan2025specreason}, SplitReason \citep{akhauri2025splitreason}, RelayLLM \citep{huang2026relayllm}, R-Stitch \citep{chen2025rstitch} and TrigReason \citep{zhao2026trigreason}. Our swap is a diagnostic rather than a system; its results help explain why such interventions can be inexpensive.
+
+\paragraph{Cross-model CoT transfer.}
+\citet{cheng2026travels} transfer truncated reasoning from stronger providers to weaker receivers of different sizes and families, and find that force-answer transfer on AIME is largely driven by the answer being available in the prefix, whereas on other benchmarks it reflects partial answer information or the receiver's own competence; CoT-X \citep{bi2025cotx} studies adaptive transfer. Our design differs in three respects. Writer and reader are a model and its own compressed copy, which share tokenizer, data and training recipe, so differences can be attributed to compression. Both roles are crossed, which separates writing damage from reading damage. The reader's answer is capped at 32 tokens, which leaves little room to re-solve the problem, and their leakage analysis is adopted as a control.
+
+\paragraph{Exposure bias.}
+Models trained or evaluated on reference prefixes but run on their own outputs accumulate errors \citep{bengio2015scheduled,ross2010efficient,ross2011dagger}. Teacher-forced fidelity metrics for compression (perplexity, KL, total variation) evaluate the compressed model only on the dense model's states. Our measurements quantify the gap between that setting and free generation for reasoning models.
+
+\section{Setup}
+\label{sec:setup}
+
+\paragraph{Models and compression.}
+We use Qwen3-1.7B, 4B, 8B and 14B in thinking mode \citep{yang2025qwen3} and DeepSeek-R1-Distill-Llama-8B \citep{deepseek2025r1} (R1-Llama-8B), which differs in architecture family and training recipe. As natively smaller dense references we use Qwen3-0.6B and DeepSeek-R1-Distill-Qwen-1.5B (R1-Qwen-1.5B), which are not compressed. Compression is simulated by dequantizing weights to bf16, which isolates distributional effects from kernel effects. We apply round-to-nearest quantization (RTN; W8/W4/W3, group size 128 or per channel), GPTQ \citep{frantar2023gptq} (W4/W3, group size 128 or 64, calibrated on C4; \citealp{raffel2020t5}), Wanda \citep{sun2024wanda} (30/40/50\% unstructured sparsity), and the released AWQ-W4 checkpoints \citep{lin2024awq}. Embeddings, normalization layers and the output head remain in bf16. We call compressors with 3-bit weights or 50\% sparsity \emph{severe} and all others \emph{mild}, a definition fixed by bit width and sparsity rather than by the observed damage; it misclassifies the smallest model, for which some 4-bit variants already collapse, and, in the opposite direction, Qwen3-32B under 50\% sparsity (\S\ref{sec:failure}).
+
+\paragraph{Tasks, decoding and statistics.}
+We use MATH-500 \citep{hendrycks2021math,lightman2024verify} (300 of the 500 problems), GPQA-Diamond \citep{rein2023gpqa} (198 problems; options shuffled with a fixed seed), and BIG-Bench Hard \citep{suzgun2023bbh} (300 problems from 23 tasks, excluding the two arithmetic tasks and the two with long free-form outputs). The MATH and BBH subsets are uniform random samples without replacement under a fixed seed, not stratified by subject, difficulty level or task; the BBH subset contains 6 to 18 of the 5,511 items of each of the 23 tasks. GPQA-Diamond is used in full. Each problem receives four samples with temperature 0.6, top-$p$ 0.95, top-$k$ 20 and a budget of 16,384 tokens, served with vLLM \citep{kwon2023vllm}; dense and compressed models share the engine and settings. Answers are graded with math-verify (MATH), the option letter (GPQA) or a normalized string match (BBH). We report per-problem means with 95\% confidence intervals from 2,000 bootstrap resamples of problems; paired comparisons resample problems jointly.
+
+\section{Collapse and dilation}
+\label{sec:budget}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figures/budget_curves.pdf}
+  \caption{Accuracy as a function of the reasoning budget for the dense Qwen3-4B and three compressed variants on MATH-500. The two-parameter fit $\alpha\,\acc_D(b/\kappa)$ (dashed) tracks the measured curve. Mild compression mainly rescales the time axis ($\kappa$); severe compression also scales it down ($\alpha$).}
+  \label{fig:budget}
+\end{figure}
+
+For each compressed model $Q$ we fit $\acc_Q(b)=\alpha\,\acc_D(b/\kappa)$ by least squares on a 24-point logarithmic grid of budgets between 512 and 16,384 tokens (Figure~\ref{fig:budget}, Table~\ref{tab:alpha}). The dense curve $\acc_D$ is measured on a 400-point logarithmic grid between 64 and 16,384 tokens and interpolated linearly in $\log b$; it is set to 0 below 64 tokens and held at its 16k value above 16,384 tokens, which matters when $\kappa<1$ and $b/\kappa$ exceeds the measured range. We parameterize $\kappa=e^{\theta}$, constrain $\alpha\ge0$, and minimize with Nelder--Mead from several starting points ($\alpha\in\{0.5,1\}$, $\kappa\in\{1,2,4\}$), keeping the best solution. A compressed curve below 0.01 at every budget is assigned $\alpha=0$ with $\kappa$ undefined. Bootstrap intervals refit 200 joint resamples of problems, starting also from the point estimate. For the out-of-sample comparison, all families are fitted on the grid points up to 8,192 tokens and evaluated on the points between 8,192 and 16,384 tokens. The fit has a median RMSE of 0.007 and a maximum of 0.025 over the 51 variants. Table~\ref{tab:fitval} compares it with three other two-parameter families built on the dense curve. A power transform fits the typical variant equally well, while an additive shift and an affine map fit worse; the multiplicative time-scale form has the smallest worst-case error both in sample and when the model is fitted on budgets up to 8k and used to predict 8k--16k. We adopt it for this robustness and because it has a simple reading: $\kappa$ is the factor by which the compressed model needs more ($\kappa>1$) or fewer ($\kappa<1$) tokens to reach the same share of its final accuracy. It is an effective parameterization of the budget curve rather than a direct measurement of reasoning speed, and the power family describes the typical variant equally well. When $\alpha$ is small the compressed curve is nearly flat and $\kappa$ is not identified (the fit then reaches similar error for very different values of $\kappa$), so we report $\kappa$ only for variants with $\alpha\ge0.3$. Bootstrap intervals, which resample problems jointly for both models, exclude $\kappa=1$ for \input{tables/fit_validation_note.tex} variants with an identified $\kappa$.
+
+\begin{table}[t]
+  \centering\small\setlength{\tabcolsep}{3pt}
+  \adjustbox{max width=\linewidth}{\input{tables/fit_validation.tex}}
+  \caption{Two-parameter families fitted to the 51 budget curves: RMSE on the full grid, out-of-sample (OOS) error when fitting on $b\le$8k and predicting $b>$8k, and the number of variants for which each family is best.}
+  \label{tab:fitval}
+\end{table}
+
+\begin{table}[t]
+  \centering\small\setlength{\tabcolsep}{3pt}
+  \adjustbox{max width=\linewidth}{\input{tables/alpha_kappa_summary.tex}}
+  \caption{Ranges of $\alpha$ and $\kappa$ by regime and maximum fit error per model and task. Per-variant values with bootstrap intervals are in Appendix~\ref{app:tables}.}
+  \label{tab:alpha}
+\end{table}
+
+Mild compression mainly rescales the budget axis. On MATH, mild variants of Qwen3-4B, 8B and 14B keep $\alpha$ between 0.84 and 1.01 while $\kappa$ ranges from 0.76 to 1.25, so some compressed models reach their accuracy with fewer tokens than the dense model and others with more. Severe compression additionally lowers the vertical scale, with $\alpha$ down to 0: within budgets up to 16k, the compressed model retains a smaller share of the dense model's accuracy. Because the curves are observed only up to 16k tokens, $\alpha$ is a finite-budget quantity rather than an asymptotic ceiling; for GPTQ-W3 on Qwen3-4B, accuracy still rises from 0.575 at 16k to 0.672 at 32k (\S\ref{sec:failure}). The severity of a given compressor depends strongly on model size: Qwen3-1.7B already collapses under 4-bit RTN ($\alpha=0.50$), whereas Qwen3-14B keeps $\alpha\ge0.84$ under 3-bit quantization. On GPQA the mild variants have point estimates of $\alpha$ between 0.89 and 1.05, but with intervals too wide to establish a lower retained accuracy.
+
+\paragraph{Same problems?}
+An aggregate curve does not show which problems a compressed model still solves. We therefore compare per-problem success at matched effective budgets: the compressed model at $b$ and the dense model at $b/\kappa$, with $b$ the largest budget for which both are measured (Appendix Table~\ref{tab:overlap}). \input{tables/problem_overlap_note.tex}. For Qwen3 on MATH and BBH, the compressed model's successes are close to a subset of the dense model's: the per-problem overlap is within 0.05 of the aggregate ratio, and 0.5--6\% of the compressed model's success falls on problems the dense model solves less often, against 2--4\% between two halves of the dense model's own samples. There, $\alpha$ can be read as the share of the dense model's success that is retained. This reading fails for R1-Llama-8B, where 10--13\% of the compressed models' success falls on such problems (3.5\% for the dense model against itself), and for Qwen3-4B with GPTQ-W3 on GPQA (32\%, against 14\%): these compressed models solve partly different problems, and $\alpha$ is only an aggregate ratio.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.62\linewidth]{figures/loop_hazard.pdf}
+  \caption{Loop onsets per 1k tokens at risk, by position band, for three collapsed configurations.}
+  \label{fig:hazard}
+\end{figure}
+
+\paragraph{What collapse is.}
+In collapsed variants, 92--100\% of the truncated traces end in token-periodic loops with a period of at most 1,024 tokens, whereas the few truncated traces of mild variants are not loops (Appendix~\ref{app:loops}). The hazard of entering a loop increases along the trace; for Wanda-50\% on Qwen3-4B it rises from 0.04 to 0.24 onsets per 1k tokens at risk between the first 2k tokens and the 8--16k band (Figure~\ref{fig:hazard}). Except for the most damaged Qwen3-1.7B variants, loops begin late, with median onsets between 4k and 12k tokens, while dense traces end at a median of about 3.8k tokens: the compressed model first fails to conclude and then loops. Teacher-forced token divergence, measured on dense traces, decreases along the trace, so the divergence on the dense model's states does not account for the rising hazard; the divergence on the compressed model's own states, which we do not measure along the trace, may.
+
+\section{How compressed models fail}
+\label{sec:failure}
+
+We classify every trace that does not end with a correct answer within 16k tokens as a \emph{wrong answer} (the trace terminated) or as \emph{non-terminating} (the budget ran out), and split non-terminating traces into loops (Appendix~\ref{app:loops}) and long traces without a loop. We report rates over all traces, whose denominator is fixed, and the non-terminating share of errors, which describes how a model fails independently of how often. All models of a task answer the same problems, so differences between models are bootstrapped over problems jointly.
+
+\paragraph{Compression and the parent.}
+Severe compression raises the non-termination rate in all 22 severe variants and the non-terminating share of errors in 19 of them, across both families and all three tasks (Table~\ref{tab:failure}; Appendix Table~\ref{tab:failurepaired}). Loops dominate under RTN-W3 and Wanda-50\% (81--87\% of the errors of these compressors on Qwen3-4B and of Wanda-50\% on Qwen3-8B, on MATH), whereas GPTQ-W3 produces long traces without a loop (85\% and 83\% of the errors on Qwen3-4B and Qwen3-8B). Mild compression raises the non-termination rate in 12 of 29 variants and the non-terminating share in 7 of 29. Increases above 0.06 occur only on the smallest parent, Qwen3-1.7B ($+0.10$ to $+0.47$ for its 4-bit and Wanda-30\% variants, some of which already collapse), and for per-channel RTN-W4 on Qwen3-8B ($+0.14$); on Qwen3-4B, mild variants even shift errors slightly toward wrong answers. The dense parents start from a profile in which non-termination is common: on MATH, 49--68\% of the few errors of Qwen3-1.7B, 4B and 8B are non-terminating, against 32\% [25, 39] for Qwen3-0.6B. Severe compression moves this profile further toward non-termination; for Qwen3-8B under GPTQ-W3, the error rate grows from 5\% to 20\% and the non-terminating share from 64\% to 85\%.
+
+\paragraph{Compression versus a smaller model.}
+Is a compressed model simply a weaker model? We pair each natively smaller dense model with every compressed variant whose accuracy on the same task is within 0.03 (Appendix Table~\ref{tab:matched}). When the compressed model's parent is larger than the dense model, the compressed model has the larger non-terminating share in 10 of 11 pairs. On MATH, Qwen3-0.6B (0.735) has 32\% non-terminating errors against 65\% for Qwen3-1.7B with GPTQ-W4 (0.750) and 59\% with Wanda-30\% (0.736). On GPQA-Diamond, Qwen3-0.6B (0.239) has 5\% [3, 8] against 34\% [28, 40] for Qwen3-4B with GPTQ-W3 (0.236). On BIG-Bench Hard, Qwen3-1.7B (0.758) has 1\% against 19\% [13, 26] for Qwen3-4B with GPTQ-W3 (0.783). When the parents have similar profiles, as Qwen3-4B and mild variants of Qwen3-8B and 14B, the compressed model never has the larger share (in one pair it has a smaller one). In Qwen3, a compressed model and a smaller dense model of equal accuracy are thus not interchangeable: the compressed model inherits the failure profile of its larger parent and, under severe compression, adds non-termination to it. Outside mathematics, non-termination remains a minority of the errors of moderately compressed models (19\% and 34\% for GPTQ-W3 on BIG-Bench Hard and GPQA), but dense Qwen3 models of similar accuracy almost never fail that way.
+
+\paragraph{A different family.}
+The contrast does not transfer to the R1-Distill family. R1-Qwen-1.5B, a small model distilled from the same teacher as R1-Llama-8B on a different base, reaches 0.833 on MATH with 43\% [35, 52] non-terminating errors, as many as R1-Llama-8B with GPTQ-W3 (0.754, 41\% [34, 48]) and more than its 4-bit variants (30--33\%). Non-termination therefore distinguishes compressed models from the smaller Qwen3 models, not from small reasoners in general. Both small models are distilled, but R1-Qwen-1.5B was trained only by supervised fine-tuning on the teacher's traces, whereas the small Qwen3 models were distilled from larger Qwen3 models with an on-policy stage; whether this difference explains the contrast is not tested here.
+
+\paragraph{Budget.}
+Non-termination is measured at 16k tokens, half of the output length recommended for Qwen3. To test whether it is an artifact of the budget, we let the same model continue every truncated trace by another 16k tokens with the same sampler, for 23 models and variants (all long traces without a loop and up to 200 sampled loops per variant, reweighted; Appendix Table~\ref{tab:extend}). Loops almost never resolve: 16 of 1,508 extended loops (1.1\%) terminate within the extra 16k tokens. Dense models are the opposite case: their non-termination falls from 3--8\% at 16k to at most 1.1\% at 32k, so their few truncations were mostly a matter of budget. Compressed models lie in between and keep a non-terminating share far above their parents. Loop-dominated variants (Wanda-50\%, RTN-W3) are unchanged (Qwen3-4B Wanda-50\% on MATH: 0.509 at 16k, 0.508 at 32k). GPTQ-W3, whose truncations are mostly long traces without a loop, recovers part of them, but less than the dense model: on Qwen3-4B MATH its accuracy rises from 0.575 to 0.672 and its non-termination falls from 0.380 to 0.223, against 0.961 and 0.005 for the dense model at 32k. In every one of the 12 severe variants extended, non-termination at 32k remains above the parent's rate at 16k, and the comparisons with smaller dense models at matched accuracy keep their direction (e.g., Qwen3-1.7B GPTQ-W4 at 0.803 versus Qwen3-0.6B at 0.750, with non-termination of 0.049 versus 0.010 at 32k).
+
+\paragraph{Equal memory.}
+In deployment, the alternative to a compressed model is often a smaller dense model that fits in the same memory. We compare every quantized Qwen3 variant with each smaller dense Qwen3 model whose bf16 weights take at least as much memory, on MATH (weight memory includes 16-bit group scales; unstructured sparsity is excluded because it saves no memory in dense storage; Appendix Table~\ref{tab:memory}). \input{tables/memory_note.tex}. Calibrated 4-bit quantization (AWQ, GPTQ) of the next larger model uses 21--38\% less memory and loses at most 0.015 against the smaller dense model: Qwen3-4B with AWQ-W4 (2.7\,GB) reaches 0.929 against 0.892 for the dense Qwen3-1.7B (3.4\,GB), and Qwen3-14B with GPTQ-W4 (10.1\,GB) matches the dense Qwen3-8B (16.4\,GB; 0.945 versus 0.947) with 14\% fewer tokens; the only significant loss is for Qwen3-8B with GPTQ-W4 against the dense Qwen3-4B ($-0.015$ [$-0.030$, $-0.002$]). Uncalibrated RTN-W4 is less reliable (Qwen3-14B: $-0.094$). Every 3-bit variant is less accurate than the smaller dense model, with intervals below zero, and spends 9\% to 174\% more tokens per query; for Qwen3-8B with GPTQ-W3 against the dense Qwen3-4B, accuracy drops by 0.14 while tokens per query rise by 51\%.
+
+\paragraph{Real kernels and scale.}
+Compression in this study is simulated by dequantizing weights. For the released AWQ-W4 checkpoints of Qwen3-4B and 8B we also generate with real 4-bit kernels in vLLM. \input{tables/robust_kernel_note.tex}; the difference for Qwen3-8B is small next to the effects of severe compression studied here. \input{tables/robust_speed_note.tex}. To test a larger model, we compress Qwen3-32B with RTN-W4 and Wanda-50\% and evaluate it on a fixed sample of 100 of the 300 MATH problems (Appendix Table~\ref{tab:robust}); GPTQ did not fit in the memory of a single GPU for this model, and a 3-bit RTN checkpoint did not fit in our storage quota. \input{tables/robust_32b_note.tex}. At this size, 50\% sparsity behaves like mild compression: the model keeps most problems ($\alpha=0.93$), reaches its accuracy with fewer tokens than the dense model ($\kappa=0.79$), its non-termination does not increase significantly, and early exit fires on 1\% of its traces. This extends the dependence of severity on model size seen from Qwen3-1.7B to Qwen3-14B: a fixed bit width or sparsity does not determine whether compression is damaging. Whether a more damaging compressor makes Qwen3-32B fail by non-termination, as it does the smaller models, is not tested here.
+
+\begin{table}[t]
+  \centering\scriptsize\setlength{\tabcolsep}{2pt}
+  \adjustbox{max width=\linewidth}{\input{tables/failure_mode.tex}}
+  \caption{How models fail on MATH-500 (16k budget), sorted by accuracy: accuracy, truncated share of all traces, and share of errors that did not terminate (non-term./err.), split into loops and long traces without a loop (95\% bootstrap CIs over problems). GPQA, BIG-Bench Hard and the R1-Distill family are in Appendix Table~\ref{tab:failuremore}.}
+  \label{tab:failure}
+\end{table}
+
+\section{Derivation versus stopping}
+\label{sec:forced}
+
+\begin{table}[t]
+  \centering\small\setlength{\tabcolsep}{2.5pt}
+  \adjustbox{max width=\linewidth}{\input{tables/forced.tex}}
+  \caption{Natural vs.\ forced accuracy at reasoning budget $b$ (Qwen3-4B, MATH-500). ``Natural'' counts traces that finished within $b$ with a correct answer; ``forced'' closes the model's own reasoning at $b$ and requests the answer.}
+  \label{tab:forced}
+\end{table}
+
+A model may fail at a given budget because its reasoning does not yet contain a recoverable answer or because it contains one but the model does not stop. To distinguish the two operationally, we close the compressed model's own reasoning at budget $b$ and request the answer (Table~\ref{tab:forced}; Qwen3-4B on MATH). Under mild compression, forced accuracy matches the dense model at every budget (RTN-W4: 0.65 versus 0.69 at 1k tokens, 0.75 versus 0.76 at 4k). Under severe compression, forcing at 16k recovers only 15--22\% of the loss: RTN-W3 improves from 0.181 to 0.293, Wanda-50\% from 0.427 to 0.541 and GPTQ-W3 from 0.575 to 0.632, against 0.934 for the dense model. Under this protocol, most of the severe-compression loss is therefore not recovered by stopping earlier: the model's own reasoning rarely yields the answer when the model is made to commit. Whether the answer was never derived or was derived but cannot be expressed is not separated by this test. The result qualifies the overthinking account of \citet{lotfi2026quantized}. For GPTQ-W3, whose dilation is the largest ($\kappa=1.87$), part of this loss is recovered by more budget: continuing the truncated traces to 32k tokens raises its accuracy to 0.672, more than forcing at 16k (0.632). For the loop-dominated compressors the opposite holds, and forcing helps more than continuing (Wanda-50\%: 0.541 forced at 16k, 0.43 at 32k). Nor does the loop make a previously recoverable answer unrecoverable: over 3,066 looped traces of compressed variants, forcing the answer at the loop onset yields 0.24 correct, against 0.23 when forcing at 16k (Appendix Table~\ref{tab:extend}). Decode-time loop breaking helps only partially: a repetition penalty of 1.1 raises Wanda-50\% to 0.59 and RTN-W3 to 0.29, and rolling back and resampling at loop onset recovers 3--15\% of looped traces (Appendix~\ref{app:interventions}).
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.7\linewidth]{figures/early_exit.pdf}
+  \caption{Early exit at loop detection: change in accuracy (95\% bootstrap CI over problems) against the share of generated tokens saved, for every model and variant. No variant shows a significant loss; the gains concentrate in loop-dominated compressors, while dense and mild variants are almost unaffected.}
+  \label{fig:earlyexit}
+\end{figure}
+
+\paragraph{Early exit at loop detection.}
+Loops almost never resolve, and forcing the answer at the loop onset is as good as forcing it at the budget, so the tokens spent inside a loop are wasted. We therefore apply the loop criterion of Appendix~\ref{app:loops} causally: from 3,072 generated tokens on and every 256 tokens, the detector checks whether some period $p\le1{,}024$ makes the last 2,048 tokens coincide with the same tokens shifted by $p$ in at least 90\% of positions ($x_t=x_{t-p}$), and the reasoning is closed with the end-of-thinking marker as soon as this holds, after which the answer is generated with at most 768 tokens. Because the prefix up to that point is the recorded trace, the policy can be evaluated on the existing generations by generating only the forced answer; the detector fires on average about 1.8k tokens after the loop onset. \input{tables/early_exit_note.tex} (Figure~\ref{fig:earlyexit}; Appendix Table~\ref{tab:earlyexit}).
+
+Section~\ref{sec:swap} shows the other side: a severely compressed model answers well when the dense model's reasoning is supplied, even though its own reasoning rarely yields the answer.
+
+\section{What compression does not change: reading versus writing}
+\label{sec:swap}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figures/matrix.pdf}
+  \caption{Accuracy for each writer--reader pair (4k reasoning tokens, answers capped at 32 tokens) in three settings. Changing the writer (rows) costs far more than changing the reader (columns). The titles give the dense model's accuracy with no reasoning.}
+  \label{fig:matrix}
+\end{figure}
+
+\paragraph{Protocol.}
+A \emph{writer} produces 4,096 tokens of reasoning; the reasoning block is closed and a \emph{reader} answers immediately, continuing from ``The final answer is \texttt{\textbackslash boxed\{}'' with at most 32 tokens. We write $\accwr{W}{R}$ for the accuracy with writer $W$ and reader $R$, and define for a dense model $D$ and its compressed copy $Q$
+\begin{equation*}
+\begin{aligned}
+\text{writing damage} &= \accwr{D}{D}-\accwr{Q}{D},\\
+\text{reading damage} &= \accwr{D}{D}-\accwr{D}{Q}.
+\end{aligned}
+\end{equation*}
+Writing damage holds the dense reader fixed and changes the writer; reading damage holds the dense reasoning fixed and changes the reader. The answer cap is required for these quantities to be interpretable. With a free answer of up to 2,048 tokens, Qwen3 readers re-solve the problem in the answer itself, so that the dense Qwen3-4B reaches 0.84 on MATH with no reasoning at all. Under the cap the dense reader without reasoning scores between 0.12 and 0.39, depending on model and task, and accuracy reflects what the reasoning carries. Results under the free answer are reported in Appendix~\ref{app:tables} for completeness.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.62\linewidth]{figures/write_read.pdf}
+  \caption{Writing vs.\ reading damage for 24 model--compressor--task combinations, with 95\% CIs. Points above the diagonal indicate that the compressed model is a worse writer than reader.}
+  \label{fig:writeread}
+\end{figure}
+
+\paragraph{Writing damage dominates.}
+Figures~\ref{fig:matrix} and~\ref{fig:writeread} summarize the result. Writing damage exceeds reading damage in \input{tables/holm_note.tex} combinations after Holm correction, including all 16 severe ones across both model families and all three tasks (Appendix Table~\ref{tab:writeread}). For severe compressors, writing damage ranges from 0.11 to 0.68, whereas reading damage never exceeds 0.094; for R1-Llama-8B it is negative ($-0.06$ to $-0.11$), meaning that compressed readers extract more from dense reasoning than the dense model itself. The three exceptions are mild 4-bit RTN variants, for which both damages are small. Given dense reasoning, severely compressed Qwen3 models close 67--100\% of their gap to the dense model on MATH; Qwen3-4B with RTN-W3, for example, rises from 0.28 when reading its own reasoning to 0.80 when reading the dense model's, against 0.89 for the dense model.
+
+\paragraph{Control for budget dilation.}
+A 4k-token prefix written by a model with $\kappa>1$ covers less of the reasoning than 4k tokens of the dense model, so part of the writing damage could reflect slower progress rather than worse reasoning. We therefore compare each compressed prefix with a dense prefix of $4096/\kappa$ tokens, interpolating the dense writer's accuracy between the measured budgets of 1k, 2k and 4k tokens (for $\kappa\le1$ we keep 4k, which is conservative). For severe compressors, matching reduces writing damage by at most about a quarter: for Qwen3-4B with GPTQ-W3 ($\kappa=1.87$), it goes from 0.37 to 0.29 [0.24, 0.33], against a reading damage of 0.08. The same 21 of 24 combinations retain a writing damage larger than the reading damage (Appendix Table~\ref{tab:dilation}).
+
+\paragraph{Control for answer leakage.}
+Cross-model transfer can be driven by answer leakage \citep{cheng2026travels}, and 4k-token dense prefixes often state the answer, in which case reading reduces to copying. We repeat the decomposition at 1k, 2k and 4k tokens, restricted to dense prefixes that contain neither \texttt{\textbackslash boxed\{} nor the gold answer string (Appendix Table~\ref{tab:leak}). Leakage does inflate the apparent reading ability: on non-leaked MATH prefixes, reading damage reaches 0.24, compared with at most 0.14 over all prefixes. The asymmetry nonetheless grows with reasoning length while reading damage stays roughly constant; for Qwen3-4B with RTN-W3, writing damage rises from 0.18 to 0.30 and 0.42 at 1k, 2k and 4k tokens, while reading damage is 0.24, 0.24 and 0.16. At 4k tokens the asymmetry holds on non-leaked prefixes in 12 of 13 severe MATH and GPQA combinations. At 1k tokens the picture is mixed: writing damage is larger in 5 combinations, the two do not differ in 6, and reading damage is larger in 2. On BBH, where 92\% of dense reasoning is complete within 4k tokens, we restrict to dense reasoning that is still incomplete at the budget; writing damage exceeds reading damage at every budget for every compressor (11 of 12 intervals exclude zero). The string-based leakage test misses equivalent forms of an answer (e.g., $0.5$ and $\frac12$) and therefore underestimates leakage.
+
+\paragraph{Is the asymmetry specific to compression?}
+Weaker models are known to benefit from the reasoning of stronger ones \citep{cheng2026travels}, so the asymmetry may reflect weakness in general rather than compression. We repeat the swap with natively smaller dense models of the same family (Qwen3-0.6B, 1.7B and 4B as weak models; 1.7B, 4B and 8B as strong ones), which share the tokenizer (Appendix Table~\ref{tab:densepairs}). The asymmetry appears there as well: writing damage exceeds reading damage in all six dense pairs. At matched accuracy of the weak model when it writes and reads its own reasoning, the two kinds of weak model are indistinguishable: Qwen3-0.6B paired with Qwen3-8B (own accuracy 0.61) has a writing damage of 0.20 and a reading damage of 0.05, while Qwen3-8B with Wanda-50\% (0.63) and with GPTQ-W3 (0.67) have 0.22 and 0.02, and 0.14 and 0.07. The writing--reading asymmetry is therefore a property of weaker reasoners, and compression places a model on the same curve as a smaller one; what distinguishes compression in Qwen3 is how the model fails (\S\ref{sec:failure}).
+
+\paragraph{Information in compressed reasoning.}
+Relative to answering with no reasoning, the dense reader still gains from compressed reasoning on MATH: typically about half of the gain it obtains from its own reasoning, and 16--29\% for RTN-W3 writers. On GPQA, reasoning written by severe compressors yields no gain.
+
+\paragraph{An interventional test.}
+When the dense model writes about 10\% of the compressed model's tokens, frequent short chunks help more than infrequent long ones for the two loop-collapse compressors ($+0.068$ and $+0.103$ for 50- versus 400-token chunks), but not for GPTQ-W3. This is consistent with compounding errors, but frequent chunks also interrupt loops before they settle, so the test does not isolate the mechanism (Appendix~\ref{sec:ablation}).
+
+\paragraph{Sampling noise.}
+Compressed models are far more sensitive to the sampling temperature than the dense model, and lower temperatures increase looping; raising the dense model's temperature, however, does not reproduce compression damage under standard decoding settings (Appendix~\ref{sec:temperature}).
+
+\section{Negative results}
+\label{sec:negative}
+
+Several attempts to predict compression damage without generation were unsuccessful, and we report them because they bound what such metrics can claim. Per-token KL and total variation under teacher forcing rank the collapse loss well (pooled Spearman 0.93--0.94 over 23 variants), and a cheap probe of 1k-token continuations reaches 0.97, but none of these quantities predicts $\kappa$ in the mild regime ($|\rho|\le0.58$). An estimator of the accuracy change based on the performance-difference lemma \citep{kakade2002approximately}, with forks sampled in proportion to the token-level divergence, has variance orders of magnitude above the signal. Damage is not a single function of divergence multiplied by reasoning length.
+
+We also pre-registered a rule derived from development data: thinking protects compressed models when the token-level total variation is below 0.114 and amplifies damage above it. The rule, the metrics, the held-out set and the success criteria were fixed in a dated file before the held-out data were generated (Appendix~\ref{app:prereg}). On the held-out models and compressors, the predicted sign was correct for 9 of 10 points, but the pre-registered monotonicity criterion failed (Spearman $+0.81$ instead of at most $-0.6$), no held-out point fell above the threshold, and Qwen3-14B with RTN-W4 is a clear counterexample. The threshold is therefore not claimed.
+
+\section{Implications}
+
+Compressed reasoning models should be evaluated on budget curves rather than on a single accuracy value: one long generation per model yields $\alpha$ and $\kappa$, which distinguish a compressed model that needs a different budget from one that retains less of the dense model's accuracy within the budget. In Qwen3, a compressed model and a smaller dense model of equal accuracy are not interchangeable: the compressed model inherits its parent's failure profile and, under severe compression, adds non-termination, which a single accuracy value hides. Because forcing an answer recovers little of this loss, remedies should target the progress of the reasoning itself, for instance by training on the model's own trajectories, rather than only the decision to stop. When memory is the constraint, calibrated 4-bit quantization of a larger model is close to or better than a smaller dense model, whereas 3-bit quantization is not, and its cost appears in tokens as well as in accuracy. Since loops are detectable while they form, closing the reasoning at detection is a cheap default for compressed deployments: in our evaluation it saved tokens and never lowered accuracy significantly. Teacher-forced fidelity metrics evaluate a compressed model on the dense model's states, the setting closest to our reading condition; they rank damage but do not capture the larger damage we observe when the model writes its own reasoning, which supports evaluating and training compressed reasoners on their own trajectories \citep{chen2026onpolicy,zheng2026rightonq}. The preserved reading ability may also explain why routing a small fraction of tokens or steps to a stronger model recovers accuracy \citep{huang2026relayllm,akhauri2025splitreason}; for collapse-type damage, the timing of such interventions matters in addition to their amount.
+
+\section{Limitations}
+
+The study covers two model families and math, science and BIG-Bench Hard tasks, but no code generation; the failure-mode contrast with natively smaller models holds for Qwen3 on three tasks but not for a small R1-distilled model, and the swap with smaller dense models covers only Qwen3 on MATH; BIG-Bench Hard, the forced answer and the interventional test were run only on Qwen3-4B. All generations use a 16k-token budget, half of the length recommended for Qwen3; extending truncated traces to 32k leaves the conclusions unchanged, but for GPTQ-W3 a substantial part of the 16k non-termination resolves, and budgets beyond 32k were not tested. The severity rule is a priori in the sense that it depends only on bit width and sparsity, but it was not registered before the experiments. The Qwen3-32B check uses 100 of the 300 MATH problems, a single task and only two compressors, because GPTQ and a third checkpoint did not fit in our GPU memory and storage. Compression is simulated and weight-only, except for a check with real 4-bit AWQ kernels; activation and KV-cache quantization are not studied, and each configuration uses a single calibration run. Weight memory in the equal-memory comparison is computed from bit width and group size, not measured. The early-exit policy is evaluated on recorded traces with a single detector setting that was not tuned, and the absence of a significant loss is not a guarantee for other models or tasks. The forced answer measures whether an answer can be recovered under one prompting protocol and does not identify whether the model derived it internally; similarly, $\kappa$ and $\alpha$ summarize budget curves and are not direct measurements of reasoning speed or of which problems are solved (Section~\ref{sec:budget} reports the per-problem overlap). The 32-token answer cap removes re-solving but may penalize readers that need a few verification steps, and the leakage test is string-based and approximate. The interventional test is consistent with compounding errors but does not separate them from loop interruption, and the infrequent schedules ended with a slightly lower dense share (8.6--9.5\% versus 9.7\%). Most analyses use four samples per problem (two in the interventional test). The study used about 260 H100 GPU-hours: 193 recorded by the cluster scheduler and an estimated 60--70 in early unscheduled runs.
+
+\bibliographystyle{tmlr}
+\bibliography{references}
+
+\appendix
+
+\section{An interventional test}
+\label{sec:ablation}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.62\linewidth]{figures/ablation.pdf}
+  \caption{Accuracy when the dense model writes about 10\% of the tokens in chunks of different size (Qwen3-4B, MATH-500, two samples per problem).}
+  \label{fig:ablation}
+\end{figure}
+
+If compressed models fail by compounding their own deviations, the frequency of corrections should matter at a fixed amount of correction. We let the dense model write about 10\% of the tokens of the compressed model's reasoning, in chunks of 50, 100, 200 or 400 tokens, within one shared 16k budget (Qwen3-4B, MATH; Figure~\ref{fig:ablation}). For the two compressors whose failure is collapse into loops, frequent corrections outperform infrequent ones at the same dense share: chunks of 50 versus 400 tokens yield $+0.068$ [$+0.030$, $+0.107$] for RTN-W3 and $+0.103$ [$+0.065$, $+0.143$] for Wanda-50\%. For GPTQ-W3, whose failure is dilation ($\kappa=1.87$) rather than looping, the difference is $-0.022$ [$-0.047$, $+0.003$]. These results are consistent with compounding errors for loop-collapse compressors, but they do not isolate the mechanism: frequent dense chunks also interrupt loops before they settle, which would produce the same pattern. The intervention itself is modest, recovering 10--37\% of the gap with about 10\% of dense tokens.
+
+\section{Compression and sampling noise}
+\label{sec:temperature}
+
+The dense Qwen3-4B is insensitive to the sampling temperature between 0.3 and 1.3 (accuracy 0.933--0.940), whereas compressed models are not (Appendix Table~\ref{tab:temp}). Lower temperatures increase looping: for GPTQ-W3, the share of truncated traces that are loops rises from 5\% to 61\% at temperature 0.3. Higher temperatures help the looping compressors: Wanda-50\% scores 0.27, 0.43 and 0.58 at temperatures 0.3, 0.6 and 1.0, and RTN-W3 0.08, 0.18 and 0.25, whereas GPTQ-W3 barely changes above 0.6 (0.57 and 0.60). Compressed models were not run at temperature 1.3. Under teacher forcing every compressed model is flatter than the dense one (effective temperature between 1.1 and 2.0), yet raising the dense model's temperature within this range does not reproduce compression damage. Because all runs use top-$k$ and top-$p$ truncation, which bounds the noise a higher temperature can inject, this shows only that the damage is not reproduced by temperature under standard decoding settings; it does not rule out other forms of noise.
+
+
+\section{Additional tables}
+\label{app:tables}
+
+\begin{table}[t]
+  \centering\footnotesize\setlength{\tabcolsep}{4pt}
+  \adjustbox{max width=\linewidth}{\input{tables/write_read.tex}}
+  \caption{Writing and reading damage with 95\% bootstrap CIs (4k reasoning tokens, answers capped at 32 tokens).}
+  \label{tab:writeread}
+\end{table}
+
+\begin{table}[t]
+  \centering\scriptsize\setlength{\tabcolsep}{3pt}
+  \adjustbox{max width=\linewidth}{\input{tables/dense_pairs.tex}}
+  \caption{Writer$\times$reader decomposition for natively smaller dense models and for compressed copies (MATH-500, 4k reasoning tokens, short answers). ``Alone'' is the accuracy of a model writing and reading its own reasoning.}
+  \label{tab:densepairs}
+\end{table}
+
+\begin{table}[t]
+  \centering\scriptsize\setlength{\tabcolsep}{3pt}
+  \adjustbox{max width=\linewidth}{\input{tables/failure_mode_more.tex}}
+  \caption{How models fail on GPQA-Diamond and BIG-Bench Hard (Qwen3) and on MATH-500 (R1-Distill family), 16k budget, sorted by accuracy within each block. Columns as in Table~\ref{tab:failure}. R1-Qwen-1.5B is DeepSeek-R1-Distill-Qwen-1.5B, a dense model distilled from the same teacher as R1-Llama-8B.}
+  \label{tab:failuremore}
+\end{table}
+
+\begin{table}[t]
+  \centering\scriptsize\setlength{\tabcolsep}{3pt}
+  \adjustbox{max width=\linewidth}{\input{tables/extend_32k.tex}}
+  \caption{Truncated traces continued from 16k to 32k tokens by the same model and sampler. Accuracy and non-terminating share of all traces at 16k (measured) and 32k (estimated: all long traces without a loop are extended, loops are subsampled to at most 200 and reweighted). ``loops/cut'' is the share of 16k-truncated traces that are loops. The last column gives the accuracy of a forced answer on looped traces, closing the reasoning at the loop onset versus at 16k (shown when at least 10 loops).}
+  \label{tab:extend}
+\end{table}
+
+\begin{table}[t]
+  \centering\scriptsize\setlength{\tabcolsep}{3pt}
+  \adjustbox{max width=\linewidth}{\input{tables/problem_overlap.tex}}
+  \caption{Per-problem overlap between dense and compressed successes at matched effective budgets (compressed at $b$, dense at $b/\kappa$). ``ratio'' is the aggregate accuracy ratio, ``overlap'' the share of the dense model's per-problem success that the compressed model also has, ``novel'' the share of the compressed model's success on problems where the dense model does worse, and $\rho$ the correlation of per-problem success rates. The ``self'' columns compare two halves of the dense model's samples and give the level expected from sampling noise alone.}
+  \label{tab:overlap}
+\end{table}
+
+\begin{table}[t]
+  \centering\scriptsize\setlength{\tabcolsep}{3pt}
+  \adjustbox{max width=\linewidth}{\input{tables/memory_matched.tex}}
+  \caption{Quantized Qwen3 models against smaller dense Qwen3 models with at least as much weight memory (MATH-500, 16k): weight memory, accuracy, paired difference in accuracy (compressed $-$ dense, 95\% bootstrap CI), ratio of tokens per query, non-terminating share of traces, and ratio of the decoding cost per correct answer (weight memory $\times$ tokens per correct answer).}
+  \label{tab:memory}
+\end{table}
+
+\begin{table}[t]
+  \centering\scriptsize\setlength{\tabcolsep}{3pt}
+  \adjustbox{max width=\linewidth}{\input{tables/early_exit.tex}}
+  \caption{Early exit at loop detection: accuracy without and with the policy, paired difference (95\% bootstrap CI), ratio of generated tokens (policy / natural), share of traces on which the detector fires, and false positives (traces on which it fires that would have ended with a correct answer).}
+  \label{tab:earlyexit}
+\end{table}
+
+\begin{table}[t]
+  \centering\scriptsize\setlength{\tabcolsep}{3pt}
+  \adjustbox{max width=\linewidth}{\input{tables/robustness.tex}}
+  \caption{Real 4-bit kernels and Qwen3-32B (MATH-500, 16k): accuracy, $\alpha$ and $\kappa$ with 95\% bootstrap CIs, and change in non-termination and in the non-terminating share of errors relative to the dense parent (paired 95\% bootstrap CIs).}
+  \label{tab:robust}
+\end{table}
+
+\begin{table}[t]
+  \centering\scriptsize\setlength{\tabcolsep}{3pt}
+  \adjustbox{max width=\linewidth}{\input{tables/failure_paired.tex}}
+  \caption{Effect of compression on how a model fails, relative to its own parent (compressed $-$ parent, 16k budget, paired 95\% bootstrap CIs over problems): change in the share of all traces that do not terminate, in the share that terminate with a wrong answer, and in the non-terminating share of errors.}
+  \label{tab:failurepaired}
+\end{table}
+
+\begin{table}[t]
+  \centering\scriptsize\setlength{\tabcolsep}{3pt}
+  \adjustbox{max width=\linewidth}{\input{tables/failure_matched.tex}}
+  \caption{Natively smaller dense models paired with every compressed variant whose accuracy on the same task is within 0.03: non-terminating share of errors of each, and the difference (compressed $-$ dense, paired 95\% bootstrap CI).}
+  \label{tab:matched}
+\end{table}
+
+\begin{table}[t]
+  \centering\scriptsize\setlength{\tabcolsep}{3pt}
+  \adjustbox{max width=\linewidth}{\input{tables/dilation_control.tex}}
+  \caption{Writing damage before and after matching the dense prefix length to $4096/\kappa$ tokens, compared with reading damage.}
+  \label{tab:dilation}
+\end{table}
+
+\begin{table}[t]
+  \centering\scriptsize\setlength{\tabcolsep}{3pt}
+  \adjustbox{max width=\linewidth}{\input{tables/leakage.tex}}
+  \caption{Writing vs.\ reading damage by reasoning length, over all prefixes and over prefixes that do not yet contain the answer (``no leakage''; string-based test).}
+  \label{tab:leak}
+\end{table}
+
+\begin{table}[t]
+  \centering\scriptsize\setlength{\tabcolsep}{3pt}
+  \adjustbox{max width=\linewidth}{\input{tables/swap_free.tex}}
+  \caption{Writer$\times$reader swap with a free answer of up to 2,048 tokens (4k reasoning tokens). Readers can re-solve the problem in the answer, which is why the main analysis caps the answer.}
+  \label{tab:swapfree}
+\end{table}
+
+\begin{table}[t]
+  \centering\scriptsize\setlength{\tabcolsep}{3pt}
+  \adjustbox{max width=\linewidth}{\input{tables/alpha_kappa_full.tex}}
+  \caption{Budget decomposition for all 51 compressed variants: accuracy at 16k, fitted $\alpha$ and $\kappa$ with 95\% bootstrap CIs, and RMSE. $\kappa$ is omitted when $\alpha<0.3$, where it is not identified.}
+  \label{tab:alphafull}
+\end{table}
+
+\begin{table}[t]
+  \centering\small
+  \adjustbox{max width=\linewidth}{\input{tables/temperature.tex}}
+  \caption{Accuracy at 16k tokens by sampling temperature (Qwen3-4B, MATH-500).}
+  \label{tab:temp}
+\end{table}
+
+\section{Loop detection}
+\label{app:loops}
+
+A truncated trace is classified as a loop if its last 2,048 tokens coincide with a shift of themselves by some period $p\le1024$ on at least 90\% of positions. The loop onset is the first position after which a 64-token window keeps at least 80\% agreement. Hazards are onsets divided by the number of tokens at risk in each position band.
+
+\section{Interventions}
+\label{app:interventions}
+
+A repetition penalty of 1.1 in vLLM raises Qwen3-4B accuracy at 16k from 0.43 to 0.59 (Wanda-50\%), from 0.18 to 0.29 (RTN-W3) and from 0.58 to 0.63 (GPTQ-W3), and leaves the dense model unchanged (0.934 versus 0.938). In the rollback intervention, a detected loop triggers a rollback to 64 tokens before its onset (or to half of the prefix) followed by resampling, with all generated tokens charged to the budget; only 3--15\% of looped traces recover.
+
+\section{Pre-registration}
+\label{app:prereg}
+
+The rule, metric definitions, held-out set and success criteria were written to a dated file whose SHA-256 hash is provided in the supplementary material, before any held-out data were generated. The held-out set consisted of Qwen3-14B with five compressors and of three new compressors on Qwen3-4B and Qwen3-8B. The sign criterion was met (90\%) and the correlation criterion was not. Because all held-out points fell below the threshold, the predicted sign change above it was not tested out of sample.
+
+\end{document}
