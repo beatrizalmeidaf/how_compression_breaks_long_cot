@@ -114,6 +114,6 @@ if __name__ == "__main__":
             f"{100 * nd.false_fire.max():.2f}\\% of the dense and mild traces that would have ended correctly "
             f"(at most {100 * s.worst_false_fire.max():.1f}\\% in any single dense or mild variant). One check of the "
             f"default window costs {ms:.1f}\\,ms of CPU time, against 0.7--1.8\\,s to generate the 256 tokens between "
-            f"checks for a single request with Qwen3-1.7B to 8B in our setup (Section~\\ref{{sec:failure}})")
+            f"checks for a single request with Qwen3-1.7B to 8B in our setup")
     (ROOT / "acl" / "tables" / "early_exit_sensitivity_note.tex").write_text(note + "%\n")
     print(note)

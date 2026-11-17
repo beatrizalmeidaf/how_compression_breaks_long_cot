@@ -45,7 +45,7 @@ python scripts/gen_traces.py --model qwen3-4b__gptq-w3g128 --dataset math500 --n
 
 | Section | Scripts |
 |---|---|
-| 4 Collapse and dilation (fit, validation, per-problem overlap) | `a1_budget_tax.py`, `fit_validation.py`, `problem_overlap.py`, `loop_hazard.py` |
+| 4 Collapse and dilation (fit, validation, per-problem overlap) | `a1_budget_tax.py`, `fit_validation.py`, `problem_overlap.py`, `kappa_common.py`, `loop_hazard.py` |
 | 5 How compressed models fail | `failure_mode.py`, `failure_paired.py`, `extend_traces.py`, `extend_analysis.py`, `memory_matched.py`, `robustness_check.py`, `throughput.py` |
 | 6 Derivation versus stopping, early exit | `force_answer.py`, `rollback.py`, `early_exit.py`, `early_exit_analysis.py`, `early_exit_sensitivity.py` |
 | 7 Reading versus writing | `swap_answer.py`, `leakage_check.py`, `dilation_control.py`, `dense_pairs_analysis.py`, `mix_decode.py`, `mix_report.py` |

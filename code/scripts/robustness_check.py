@@ -117,10 +117,11 @@ big = res[res.model == "qwen3-32b"] if len(res) else res
 if len(big):
     sev, mild = big[big.compressor.isin(SEVERE)], big[~big.compressor.isin(SEVERE)]
     up = lambda g: int((g.d_nonterm_lo > 0).sum())
-    bn = (f"For Qwen3-32B, severe compression raises non-termination in {up(sev)} of {len(sev)} variants and mild "
-          f"compression in {up(mild)} of {len(mild)}; " +
-          "; ".join(f"{NC[x.compressor]} reaches {x.acc:.3f} with $\\alpha={x.alpha:.2f}$" +
-                    ("" if np.isnan(x.kappa) else f" and $\\kappa={x.kappa:.2f}$") for _, x in big.iterrows()))
+    parts = [f"with {NC[x.compressor]} it reaches {x.acc:.3f} ($\\alpha={x.alpha:.2f}$" +
+             ("" if np.isnan(x.kappa) else f", $\\kappa={x.kappa:.2f}$") + "), and its non-termination " +
+             ("rises" if x.d_nonterm_lo > 0 else "does not change significantly") +
+             f" ({x.d_nonterm:+.3f} [{x.d_nonterm_lo:+.3f}, {x.d_nonterm_hi:+.3f}])" for _, x in big.iterrows()]
+    bn = "For Qwen3-32B, " + "; ".join(parts)
 else:
     bn = "Qwen3-32B was not evaluated"
 (TAB / "robust_32b_note.tex").write_text(bn + "%\n")
